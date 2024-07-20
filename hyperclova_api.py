@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
-import requests
+import requests, json
+import hyperclova_prompt as prompt
 
 
 class CompletionExecutor:
@@ -16,14 +17,22 @@ class CompletionExecutor:
             'X-NCP-APIGW-API-KEY': self._api_key_primary_val,
             'X-NCP-CLOVASTUDIO-REQUEST-ID': self._request_id,
             'Content-Type': 'application/json; charset=utf-8',
-            'Accept': 'text/event-stream'
+            # 'Accept': 'text/event-stream' #문자 스트림(실시간 응답) 속성 여부-필요시 주석 해제
         }
 
         with requests.post(self._host + '/testapp/v1/chat-completions/HCX-003',
-                           headers=headers, json=completion_request, stream=True) as r:
+                           headers=headers, json=completion_request, stream=False) as r:
             for line in r.iter_lines():
                 if line:
-                    print(line.decode("utf-8"))
+                    response_json = line.decode("utf-8")
+                    response_dict = json.loads(response_json)
+                    print(response_dict['result']['message']['content'])
+
+            # 원본 코드
+            # for line in r.iter_lines():
+            #     if line:
+            #         print(line.decode("utf-8"))
+
 
 
 if __name__ == '__main__':
@@ -34,7 +43,9 @@ if __name__ == '__main__':
         request_id='5766f037-af44-4261-8356-25060d1fdbf9'
     )
 
-    preset_text = [{"role":"system","content":"당신은 주식의 ESG 보고서, 주식 분석 결과를 전달받고 이를 해석하는 주식 투자 전문가입니다.\n\nESG 보고서와 주식의 시계열 모델을 이용하여 판단하고 2가지 모두 좋을 때 투자하라고 권유하면 됩니다.\n\n투자할 때는 왜 그런지 이유를 설명해야 합니다.\n또한 응답을 줄 때 JSON 형태로 출력해줘야 합니다.\n\n{\n\"투자 판단\": \"Good\",\n\"이유\": \"String\"\n}\n와 같은 형식으로 주어야 합니다."}]
+    preset_text = [{"role":"system","content":prompt.preset},
+                    {"role" : "user", "content" : """삼성전자, E:Good, S:Good, G:Bad", 주가: "상승"""}, 
+                   ]
 
     request_data = {
         'messages': preset_text,
