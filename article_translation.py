@@ -11,7 +11,7 @@ def fetch_translated_text(api_url, article_id):
     Returns:
     - dict: A dictionary containing 'title' and 'content' of the translated article.
     """
-    url = f'{api_url}/articles/{article_id}/content'
+    url = f'{api_url}/articles/{article_id}'
 
     response = requests.get(url)
 
