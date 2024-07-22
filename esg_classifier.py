@@ -1,5 +1,7 @@
 from transformers import BertTokenizer, BertForSequenceClassification, pipeline
 import score_config
+from article_translation import fetch_translated_text
+
 
 # 1. 모델 로딩 및 파이프라인 설정
 def load_models():
@@ -15,35 +17,42 @@ def load_models():
     sentiment_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-tone')
     sentiment_nlp = pipeline("text-classification", model=sentiment_model, tokenizer=sentiment_tokenizer)
 
-    fls_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-fls', num_labels=3, ignore_mismatched_sizes=True)
+    fls_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-fls', num_labels=3,
+                                                              ignore_mismatched_sizes=True)
     fls_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-fls')
     fls_nlp = pipeline("text-classification", model=fls_model, tokenizer=fls_tokenizer)
 
     return esg_nlp, category_nlp, sentiment_nlp, fls_nlp
 
+
 # 2. ESG 관련 함수
-def classify_esg_article(nlp_pipeline, article_text):
-    results = nlp_pipeline(article_text)
+def classify_esg_article(nlp_pipeline, article_content):
+    results = nlp_pipeline(article_content)
     return results
 
-def esg_category_model(nlp_pipeline, article_text):
-    results = nlp_pipeline(article_text)
+
+def esg_category_model(nlp_pipeline, article_content):
+    results = nlp_pipeline(article_content)
     category = max(results, key=lambda x: x['score'])
     return category['label'], category['score']
 
-def esg_sentiment_model(nlp_pipeline, article_text):
-    results = nlp_pipeline(article_text)
+
+def esg_sentiment_model(nlp_pipeline, article_content):
+    results = nlp_pipeline(article_content)
     sentiment = max(results, key=lambda x: x['score'])
     return sentiment['label'], sentiment['score']
 
-def esg_fls_model(nlp_pipeline, article_text):
-    results = nlp_pipeline(article_text)
+
+def esg_fls_model(nlp_pipeline, article_content):
+    results = nlp_pipeline(article_content)
     fls = max(results, key=lambda x: x['score'])
     return fls['label'], fls['score']
+
 
 def get_esg_label(results):
     label = max(results, key=lambda x: x['score'])['label']
     return label
+
 
 # 3. 분석 결과 처리 함수
 def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
@@ -63,19 +72,25 @@ def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
 
     return score
 
+
 # 4. 전체 프로세스 실행 함수
-def process_article(article_text):
+def process_article(api_url, api_key, article_id):
+    # 번역된 텍스트를 API에서 가져오기
+    article_content = fetch_translated_text(api_url, api_key, article_id)
+
+    # 모델 로딩 및 파이프라인 설정
     esg_nlp, category_nlp, sentiment_nlp, fls_nlp = load_models()
 
-    results = classify_esg_article(esg_nlp, article_text)
+    # 번역된 텍스트를 ESG 분석 모델에 적용
+    results = classify_esg_article(esg_nlp, article_content)
     esg_label = get_esg_label(results)
 
     if esg_label == 'None':
         return {"result": "Non-ESG"}
 
-    esg_category, category_score = esg_category_model(category_nlp, article_text)
-    esg_sentiment, sentiment_score = esg_sentiment_model(sentiment_nlp, article_text)
-    esg_fls, fls_score = esg_fls_model(fls_nlp, article_text)
+    esg_category, category_score = esg_category_model(category_nlp, article_content)
+    esg_sentiment, sentiment_score = esg_sentiment_model(sentiment_nlp, article_content)
+    esg_fls, fls_score = esg_fls_model(fls_nlp, article_content)
 
     investment_score = calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls)
 
@@ -90,10 +105,3 @@ def process_article(article_text):
         "fls_score": fls_score,
         "investment_score": investment_score
     }
-
-# 예시 기사 텍스트
-article_text = "Climate change is one of the most pressing issues of our time, with far-reaching impacts on ecosystems, weather patterns, and human societies. The burning of fossil fuels, deforestation, and industrial activities have significantly increased the concentration of greenhouse gases in the atmosphere, leading to global warming. This warming has caused glaciers to melt, sea levels to rise, and extreme weather events to become more frequent and severe. To mitigate these effects, it is crucial to transition to renewable energy sources, implement sustainable agricultural practices, and protect natural habitats. Collective action from governments, businesses, and individuals is essential to address the challenges posed by climate change and ensure a sustainable future for generations to come."
-
-# 기사 처리
-result = process_article(article_text)
-print(result)
