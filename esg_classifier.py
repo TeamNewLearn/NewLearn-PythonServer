@@ -1,4 +1,5 @@
 from transformers import BertTokenizer, BertForSequenceClassification, pipeline
+import score_config
 
 # 1. 모델 로딩 및 파이프라인 설정
 def load_models():
@@ -14,7 +15,11 @@ def load_models():
     sentiment_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-tone')
     sentiment_nlp = pipeline("text-classification", model=sentiment_model, tokenizer=sentiment_tokenizer)
 
-    return esg_nlp, category_nlp, sentiment_nlp
+    fls_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-fls', num_labels=3, ignore_mismatched_sizes=True)
+    fls_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-fls')
+    fls_nlp = pipeline("text-classification", model=fls_model, tokenizer=fls_tokenizer)
+
+    return esg_nlp, category_nlp, sentiment_nlp, fls_nlp
 
 # 2. ESG 관련 함수
 def classify_esg_article(nlp_pipeline, article_text):
@@ -31,28 +36,36 @@ def esg_sentiment_model(nlp_pipeline, article_text):
     sentiment = max(results, key=lambda x: x['score'])
     return sentiment['label'], sentiment['score']
 
+def esg_fls_model(nlp_pipeline, article_text):
+    results = nlp_pipeline(article_text)
+    fls = max(results, key=lambda x: x['score'])
+    return fls['label'], fls['score']
+
 def get_esg_label(results):
     label = max(results, key=lambda x: x['score'])['label']
     return label
 
 # 3. 분석 결과 처리 함수
-def calculate_investment_score(esg_label, esg_category, esg_sentiment):
+def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
     score = 0
-    if esg_label in ['Environmental', 'Social', 'Governance']:
-        score += 50  # 기본 점수
-    if esg_category in ['Climate Change', 'Corporate Governance', 'Human Capital']:
-        score += 20  # 중요 카테고리
-    if esg_sentiment == 'Positive':
-        score += 30  # 긍정적인 감정
-    elif esg_sentiment == 'Neutral':
-        score += 10  # 중립적인 감정
-    elif esg_sentiment == 'Negative':
-        score -= 20  # 부정적인 감정
+
+    # ESG 레이블에 따른 기본 점수
+    score += score_config.ESG_LABEL_SCORES.get(esg_label, 0)
+
+    # 카테고리에 따른 점수
+    score += score_config.CATEGORY_SCORES.get(esg_category, 0)
+
+    # 감정에 따른 점수
+    score += score_config.SENTIMENT_SCORES.get(esg_sentiment, 0)
+
+    # FLS에 따른 점수
+    score += score_config.FLS_SCORES.get(esg_fls, 0)
+
     return score
 
 # 4. 전체 프로세스 실행 함수
 def process_article(article_text):
-    esg_nlp, category_nlp, sentiment_nlp = load_models()
+    esg_nlp, category_nlp, sentiment_nlp, fls_nlp = load_models()
 
     results = classify_esg_article(esg_nlp, article_text)
     esg_label = get_esg_label(results)
@@ -62,8 +75,9 @@ def process_article(article_text):
 
     esg_category, category_score = esg_category_model(category_nlp, article_text)
     esg_sentiment, sentiment_score = esg_sentiment_model(sentiment_nlp, article_text)
+    esg_fls, fls_score = esg_fls_model(fls_nlp, article_text)
 
-    investment_score = calculate_investment_score(esg_label, esg_category, esg_sentiment)
+    investment_score = calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls)
 
     return {
         "result": "ESG",
@@ -72,11 +86,13 @@ def process_article(article_text):
         "category_score": category_score,
         "sentiment": esg_sentiment,
         "sentiment_score": sentiment_score,
+        "fls": esg_fls,
+        "fls_score": fls_score,
         "investment_score": investment_score
     }
 
 # 예시 기사 텍스트
-article_text = "Rhonda has been volunteering for several years for a variety of charitable community programs."
+article_text = "Climate change is one of the most pressing issues of our time, with far-reaching impacts on ecosystems, weather patterns, and human societies. The burning of fossil fuels, deforestation, and industrial activities have significantly increased the concentration of greenhouse gases in the atmosphere, leading to global warming. This warming has caused glaciers to melt, sea levels to rise, and extreme weather events to become more frequent and severe. To mitigate these effects, it is crucial to transition to renewable energy sources, implement sustainable agricultural practices, and protect natural habitats. Collective action from governments, businesses, and individuals is essential to address the challenges posed by climate change and ensure a sustainable future for generations to come."
 
 # 기사 처리
 result = process_article(article_text)
