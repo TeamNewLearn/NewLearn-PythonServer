@@ -1,6 +1,7 @@
 from transformers import BertTokenizer, BertForSequenceClassification, pipeline
 import score_config
 from article_translation import fetch_translated_text
+import concurrent.futures
 
 
 # 1. 모델 로딩 및 파이프라인 설정
@@ -28,37 +29,51 @@ def load_models():
 # 2. ESG 관련 함수
 def classify_esg_article(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
+    if not results:
+        raise ValueError("Data is insufficient.")
     return results
 
 
 def esg_category_model(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
-    category = max(results, key=lambda x: x['score'])
-    return category['label'], category['score']
+    if not results:
+        raise ValueError("Data is insufficient.")
+
+    best_result = max(results, key=lambda x: x['score'])
+    return best_result['label'], best_result['score']
 
 
 def esg_sentiment_model(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
-    sentiment = max(results, key=lambda x: x['score'])
-    return sentiment['label'], sentiment['score']
+    if not results:
+        raise ValueError("Data is insufficient.")
+
+    best_result = max(results, key=lambda x: x['score'])
+    return best_result['label'], best_result['score']
 
 
 def esg_fls_model(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
-    fls = max(results, key=lambda x: x['score'])
-    return fls['label'], fls['score']
+    if not results:
+        raise ValueError("Data is insufficient.")
+
+    best_result = max(results, key=lambda x: x['score'])
+    return best_result['label'], best_result['score']
 
 
 def get_esg_label(results):
-    label = max(results, key=lambda x: x['score'])['label']
-    return label
+    if not results:
+        raise ValueError("Data is insufficient.")
+
+    best_result = max(results, key=lambda x: x['score'])
+    return best_result['label']
 
 
 # 3. 분석 결과 처리 함수
 def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
     score = 0
 
-    # ESG 레이블에 따른 기본 점수
+    # ESG 레이블에 따른 점수
     score += score_config.ESG_LABEL_SCORES.get(esg_label, 0)
 
     # 카테고리에 따른 점수
@@ -75,22 +90,50 @@ def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
 
 # 4. 전체 프로세스 실행 함수
 def process_article(api_url, api_key, article_id):
-    # 번역된 텍스트를 API에서 가져오기
-    article_content = fetch_translated_text(api_url, api_key, article_id)
+    try:
+        article_content = fetch_translated_text(api_url, api_key, article_id)
+        if not article_content:
+            raise ValueError("Data is insufficient.")
+    except ValueError as e:
+        return {"result": str(e)}
 
     # 모델 로딩 및 파이프라인 설정
     esg_nlp, category_nlp, sentiment_nlp, fls_nlp = load_models()
 
-    # 번역된 텍스트를 ESG 분석 모델에 적용
-    results = classify_esg_article(esg_nlp, article_content)
-    esg_label = get_esg_label(results)
+    print("Loaded models successfully.")
 
+    # 번역된 텍스트를 ESG 분석 모델에 적용
+    try:
+        results = classify_esg_article(esg_nlp, article_content)
+        print("ESG Classification Results:", results)
+        esg_label = get_esg_label(results)
+        print("ESG Label:", esg_label)
+    except ValueError as e:
+        return {"result": str(e)}
+
+    # None 레이블이 반환될 경우 분석 중지
     if esg_label == 'None':
         return {"result": "Non-ESG"}
 
-    esg_category, category_score = esg_category_model(category_nlp, article_content)
-    esg_sentiment, sentiment_score = esg_sentiment_model(sentiment_nlp, article_content)
-    esg_fls, fls_score = esg_fls_model(fls_nlp, article_content)
+    # 병렬 처리
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {
+            executor.submit(esg_category_model, category_nlp, article_content): 'category',
+            executor.submit(esg_sentiment_model, sentiment_nlp, article_content): 'sentiment',
+            executor.submit(esg_fls_model, fls_nlp, article_content): 'fls'
+        }
+        try:
+            results = {}
+            for future in concurrent.futures.as_completed(futures):
+                model_name = futures[future]
+                results[model_name] = future.result()
+            print("Parallel Model Results:", results)
+        except ValueError as e:
+            return {"result": str(e)}
+
+    esg_category, category_score = results['category']
+    esg_sentiment, sentiment_score = results['sentiment']
+    esg_fls, fls_score = results['fls']
 
     investment_score = calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls)
 
@@ -105,3 +148,9 @@ def process_article(api_url, api_key, article_id):
         "fls_score": fls_score,
         "investment_score": investment_score
     }
+
+
+# 테스트 실행
+if __name__ == "__main__":
+    result = process_article()
+    print(result)
