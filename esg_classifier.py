@@ -79,6 +79,21 @@ def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
     # 카테고리에 따른 점수
     score += score_config.CATEGORY_SCORES.get(esg_category, 0)
 
+    # ESG 레이블과 카테고리 일치 시 추가 점수
+    category_label_mapping = {
+        'Climate Change': 'Environmental',
+        'Natural Capital': 'Environmental',
+        'Pollution & Waste': 'Environmental',
+        'Human Capital': 'Social',
+        'Product Liability': 'Social',
+        'Community Relations': 'Social',
+        'Corporate Governance': 'Governance',
+        'Business Ethics & Values': 'Governance'
+    }
+
+    if category_label_mapping.get(esg_category) == esg_label:
+        score += score_config.CATEGORY_MATCH_BONUS
+
     # 감정에 따른 점수
     score += score_config.SENTIMENT_SCORES.get(esg_sentiment, 0)
 
