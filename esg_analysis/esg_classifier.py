@@ -1,8 +1,7 @@
 from transformers import BertTokenizer, BertForSequenceClassification, pipeline
 import score_config
-from article_translation import fetch_translated_text
+from article_translation import fetch_article
 import concurrent.futures
-
 
 # 1. 모델 로딩 및 파이프라인 설정
 def load_models():
@@ -25,14 +24,12 @@ def load_models():
 
     return esg_nlp, category_nlp, sentiment_nlp, fls_nlp
 
-
 # 2. ESG 관련 함수
 def classify_esg_article(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
     if not results:
         raise ValueError("Data is insufficient.")
     return results
-
 
 def esg_category_model(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
@@ -42,7 +39,6 @@ def esg_category_model(nlp_pipeline, article_content):
     best_result = max(results, key=lambda x: x['score'])
     return best_result['label'], best_result['score']
 
-
 def esg_sentiment_model(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
     if not results:
@@ -50,7 +46,6 @@ def esg_sentiment_model(nlp_pipeline, article_content):
 
     best_result = max(results, key=lambda x: x['score'])
     return best_result['label'], best_result['score']
-
 
 def esg_fls_model(nlp_pipeline, article_content):
     results = nlp_pipeline(article_content)
@@ -60,14 +55,12 @@ def esg_fls_model(nlp_pipeline, article_content):
     best_result = max(results, key=lambda x: x['score'])
     return best_result['label'], best_result['score']
 
-
 def get_esg_label(results):
     if not results:
         raise ValueError("Data is insufficient.")
 
     best_result = max(results, key=lambda x: x['score'])
     return best_result['label']
-
 
 # 3. 분석 결과 처리 함수
 def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
@@ -102,14 +95,13 @@ def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
 
     return score
 
-
 # 4. 전체 프로세스 실행 함수
 def process_article(api_url, api_key, article_id):
     try:
-        article_content = fetch_translated_text(api_url, api_key, article_id)
+        article_content = fetch_article(api_url, article_id, api_key)
         if not article_content:
             raise ValueError("Data is insufficient.")
-    except ValueError as e:
+    except Exception as e:
         return {"result": str(e)}
 
     # 모델 로딩 및 파이프라인 설정
@@ -119,7 +111,7 @@ def process_article(api_url, api_key, article_id):
 
     # 번역된 텍스트를 ESG 분석 모델에 적용
     try:
-        results = classify_esg_article(esg_nlp, article_content)
+        results = classify_esg_article(esg_nlp, article_content['content'])
         print("ESG Classification Results:", results)
         esg_label = get_esg_label(results)
         print("ESG Label:", esg_label)
@@ -133,9 +125,9 @@ def process_article(api_url, api_key, article_id):
     # 병렬 처리
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = {
-            executor.submit(esg_category_model, category_nlp, article_content): 'category',
-            executor.submit(esg_sentiment_model, sentiment_nlp, article_content): 'sentiment',
-            executor.submit(esg_fls_model, fls_nlp, article_content): 'fls'
+            executor.submit(esg_category_model, category_nlp, article_content['content']): 'category',
+            executor.submit(esg_sentiment_model, sentiment_nlp, article_content['content']): 'sentiment',
+            executor.submit(esg_fls_model, fls_nlp, article_content['content']): 'fls'
         }
         try:
             results = {}
@@ -156,16 +148,15 @@ def process_article(api_url, api_key, article_id):
         "result": "ESG",
         "label": esg_label,
         "category": esg_category,
-        "category_score": category_score,
         "sentiment": esg_sentiment,
-        "sentiment_score": sentiment_score,
         "fls": esg_fls,
-        "fls_score": fls_score,
         "investment_score": investment_score
     }
 
-
 # 테스트 실행
 if __name__ == "__main__":
-    result = process_article()
+    api_url = "your_api_url"
+    api_key = "your_api_key"
+    article_id = "article_id"
+    result = process_article(api_url, api_key, article_id)
     print(result)

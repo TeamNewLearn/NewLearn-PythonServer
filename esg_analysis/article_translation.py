@@ -1,19 +1,22 @@
 import requests
 
-def fetch_translated_text(api_url, article_id):
+
+def fetch_article(api_url, article_id, api_key):
     """
-    Fetches the translated title and content of an article from the given API.
+    Fetches the article content from the given API.
 
     Parameters:
     - api_url (str): The base URL of the API.
     - article_id (str): The ID of the article to fetch.
+    - api_key (str): The API key for authentication.
 
     Returns:
-    - dict: A dictionary containing 'title' and 'content' of the translated article.
+    - dict: A dictionary containing 'title' and 'content' of the article.
     """
     url = f'{api_url}/articles/{article_id}'
+    headers = {'Authorization': f'Bearer {api_key}'}
 
-    response = requests.get(url)
+    response = requests.get(url, headers=headers)
 
     if response.status_code == 200:
         result = response.json()
