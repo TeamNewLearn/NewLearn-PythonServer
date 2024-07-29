@@ -4,3 +4,6 @@ pydantic
 python-dotenv
 dart-fss
 requests
+transformers
+torch
+mysql-connector-python
