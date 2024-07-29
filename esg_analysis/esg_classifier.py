@@ -5,6 +5,10 @@ import mysql.connector
 import concurrent.futures
 import score_config
 import config
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 
 app = FastAPI()
 
