@@ -1,78 +1,52 @@
+from fastapi import FastAPI, HTTPException
 from transformers import BertTokenizer, BertForSequenceClassification, pipeline
-import score_config
-from article_translation import fetch_article
+from pydantic import BaseModel
+import mysql.connector
 import concurrent.futures
+import score_config
+import config
 
-# 1. 모델 로딩 및 파이프라인 설정
+app = FastAPI()
+
+# 데이터베이스 설정
+DB_CONFIG = config.get_db_config()
+
 def load_models():
     esg_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-esg', num_labels=4)
     esg_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-esg')
-    esg_nlp = pipeline("text-classification", model=esg_model, tokenizer=esg_tokenizer)
+    esg_nlp = pipeline("text-classification", model=esg_model, tokenizer=esg_tokenizer, truncation=True, max_length=512)
 
     category_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-esg-9-categories', num_labels=9)
     category_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-esg-9-categories')
-    category_nlp = pipeline("text-classification", model=category_model, tokenizer=category_tokenizer)
+    category_nlp = pipeline("text-classification", model=category_model, tokenizer=category_tokenizer, truncation=True, max_length=512)
 
     sentiment_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-tone', num_labels=3)
     sentiment_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-tone')
-    sentiment_nlp = pipeline("text-classification", model=sentiment_model, tokenizer=sentiment_tokenizer)
+    sentiment_nlp = pipeline("text-classification", model=sentiment_model, tokenizer=sentiment_tokenizer, truncation=True, max_length=512)
 
-    fls_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-fls', num_labels=3,
-                                                              ignore_mismatched_sizes=True)
+    fls_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-fls', num_labels=3, ignore_mismatched_sizes=True)
     fls_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-fls')
-    fls_nlp = pipeline("text-classification", model=fls_model, tokenizer=fls_tokenizer)
+    fls_nlp = pipeline("text-classification", model=fls_model, tokenizer=fls_tokenizer, truncation=True, max_length=512)
 
     return esg_nlp, category_nlp, sentiment_nlp, fls_nlp
 
-# 2. ESG 관련 함수
-def classify_esg_article(nlp_pipeline, article_content):
-    results = nlp_pipeline(article_content)
-    if not results:
-        raise ValueError("Data is insufficient.")
-    return results
+def get_news_articles(company_code):
+    conn = mysql.connector.connect(**DB_CONFIG)
+    cursor = conn.cursor(dictionary=True)
+    query = "SELECT news_id, translated_title, translated_body, original_title FROM news WHERE stock_code = %s"
+    cursor.execute(query, (company_code,))
+    articles = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return articles
 
-def esg_category_model(nlp_pipeline, article_content):
-    results = nlp_pipeline(article_content)
-    if not results:
-        raise ValueError("Data is insufficient.")
+def classify_article(nlp_pipeline, article_content):
+    return nlp_pipeline(article_content)
 
-    best_result = max(results, key=lambda x: x['score'])
-    return best_result['label'], best_result['score']
-
-def esg_sentiment_model(nlp_pipeline, article_content):
-    results = nlp_pipeline(article_content)
-    if not results:
-        raise ValueError("Data is insufficient.")
-
-    best_result = max(results, key=lambda x: x['score'])
-    return best_result['label'], best_result['score']
-
-def esg_fls_model(nlp_pipeline, article_content):
-    results = nlp_pipeline(article_content)
-    if not results:
-        raise ValueError("Data is insufficient.")
-
-    best_result = max(results, key=lambda x: x['score'])
-    return best_result['label'], best_result['score']
-
-def get_esg_label(results):
-    if not results:
-        raise ValueError("Data is insufficient.")
-
-    best_result = max(results, key=lambda x: x['score'])
-    return best_result['label']
-
-# 3. 분석 결과 처리 함수
 def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
     score = 0
-
-    # ESG 레이블에 따른 점수
     score += score_config.ESG_LABEL_SCORES.get(esg_label, 0)
-
-    # 카테고리에 따른 점수
     score += score_config.CATEGORY_SCORES.get(esg_category, 0)
-
-    # ESG 레이블과 카테고리 일치 시 추가 점수
     category_label_mapping = {
         'Climate Change': 'Environmental',
         'Natural Capital': 'Environmental',
@@ -83,80 +57,89 @@ def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
         'Corporate Governance': 'Governance',
         'Business Ethics & Values': 'Governance'
     }
-
     if category_label_mapping.get(esg_category) == esg_label:
         score += score_config.CATEGORY_MATCH_BONUS
-
-    # 감정에 따른 점수
     score += score_config.SENTIMENT_SCORES.get(esg_sentiment, 0)
-
-    # FLS에 따른 점수
     score += score_config.FLS_SCORES.get(esg_fls, 0)
-
     return score
 
-# 4. 전체 프로세스 실행 함수
-def process_article(api_url, api_key, article_id):
-    try:
-        article_content = fetch_article(api_url, article_id, api_key)
-        if not article_content:
-            raise ValueError("Data is insufficient.")
-    except Exception as e:
-        return {"result": str(e)}
+def save_esg_result(news_id, article_title, esg_label, esg_score):
+    conn = mysql.connector.connect(**DB_CONFIG)
+    cursor = conn.cursor()
+    query = """
+        INSERT INTO esg_result (news_id, article_title, esg_label, esg_score)
+        VALUES (%s, %s, %s, %s)
+    """
+    cursor.execute(query, (news_id, article_title, esg_label, esg_score))
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-    # 모델 로딩 및 파이프라인 설정
+class ESGRequest(BaseModel):
+    company_name: str
+
+@app.post('/esg_analysis')
+async def esg_analysis(request: ESGRequest):
+    company_name = request.company_name
+
+    # 회사 코드를 변환하는 로직 추가
+    company_code = get_company_code(company_name)
+    if not company_code:
+        raise HTTPException(status_code=404, detail="Company code not found for the given company name.")
+
+    articles = get_news_articles(company_code)
+
+    if not articles:
+        raise HTTPException(status_code=404, detail=f"No articles found for the given company code: {company_code}")
+
     esg_nlp, category_nlp, sentiment_nlp, fls_nlp = load_models()
 
-    print("Loaded models successfully.")
+    results = []
 
-    # 번역된 텍스트를 ESG 분석 모델에 적용
-    try:
-        results = classify_esg_article(esg_nlp, article_content['content'])
-        print("ESG Classification Results:", results)
-        esg_label = get_esg_label(results)
-        print("ESG Label:", esg_label)
-    except ValueError as e:
-        return {"result": str(e)}
-
-    # None 레이블이 반환될 경우 분석 중지
-    if esg_label == 'None':
-        return {"result": "Non-ESG"}
-
-    # 병렬 처리
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = {
-            executor.submit(esg_category_model, category_nlp, article_content['content']): 'category',
-            executor.submit(esg_sentiment_model, sentiment_nlp, article_content['content']): 'sentiment',
-            executor.submit(esg_fls_model, fls_nlp, article_content['content']): 'fls'
-        }
-        try:
-            results = {}
-            for future in concurrent.futures.as_completed(futures):
-                model_name = futures[future]
-                results[model_name] = future.result()
-            print("Parallel Model Results:", results)
-        except ValueError as e:
-            return {"result": str(e)}
+        futures = {executor.submit(classify_article, esg_nlp, article['translated_body']): article for article in articles}
 
-    esg_category, category_score = results['category']
-    esg_sentiment, sentiment_score = results['sentiment']
-    esg_fls, fls_score = results['fls']
+        for future in concurrent.futures.as_completed(futures):
+            article = futures[future]
+            try:
+                esg_results = future.result()
+                esg_label = max(esg_results, key=lambda x: x['score'])['label']
 
-    investment_score = calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls)
+                # Process category, sentiment, and fls models in parallel
+                category_result = classify_article(category_nlp, article['translated_body'])
+                sentiment_result = classify_article(sentiment_nlp, article['translated_body'])
+                fls_result = classify_article(fls_nlp, article['translated_body'])
 
-    return {
-        "result": "ESG",
-        "label": esg_label,
-        "category": esg_category,
-        "sentiment": esg_sentiment,
-        "fls": esg_fls,
-        "investment_score": investment_score
-    }
+                esg_category = max(category_result, key=lambda x: x['score'])['label']
+                esg_sentiment = max(sentiment_result, key=lambda x: x['score'])['label']
+                esg_fls = max(fls_result, key=lambda x: x['score'])['label']
 
-# 테스트 실행
-if __name__ == "__main__":
-    api_url = "your_api_url"
-    api_key = "your_api_key"
-    article_id = "article_id"
-    result = process_article(api_url, api_key, article_id)
-    print(result)
+                esg_score = calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls)
+
+                # 결과 저장
+                save_esg_result(article['news_id'], article['original_title'], esg_label, esg_score)
+
+                results.append({
+                    "기사 ID": article['news_id'],
+                    "기사 한글명": article['original_title'],
+                    "기사 ESG 분야": esg_label,
+                    "기사 ESG 점수": esg_score
+                })
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc))
+
+    return results
+
+def get_company_code(company_name):
+    conn = mysql.connector.connect(**DB_CONFIG)
+    cursor = conn.cursor(dictionary=True)
+    query = "SELECT stock_code FROM stock_info WHERE stock_name = %s"
+    cursor.execute(query, (company_name,))
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return result['stock_code'] if result else None
+
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5002)
