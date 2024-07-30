@@ -12,7 +12,6 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 app = FastAPI()
 
 # CORS 설정
@@ -62,19 +61,7 @@ async def financial_statements(request: FinancialRequest):
     start_date = get_start_date(period)
 
     corp_info = corp_list.find_by_corp_code(company_code)
-
-    try:
-        fs = corp_info.extract_fs(bgn_de=start_date, report_tp='quarter')
-    except dart.errors.NoDataReceived:
-        raise HTTPException(status_code=404, detail='No financial statements found for the given period.')
-    except RuntimeError as e:
-        if 'Could not find an annual report' in str(e):
-            raise HTTPException(status_code=404, detail='No annual report found.')
-        raise HTTPException(status_code=500, detail='Unexpected error occurred.')
-
-    if fs is None or 'is' not in fs or fs['is'] is None or fs['is'].empty:
-        raise HTTPException(status_code=404, detail='Income statement not found in the financial statements.')
-
+    fs = corp_info.extract_fs(bgn_de=start_date, report_tp='quarter')
     df_is = fs['is']
 
     # 컬럼 이름을 간결하게 변환하고 중복 제거
