@@ -86,7 +86,7 @@ async def financial_statements(request: FinancialRequest):
     start_date = get_start_date(period)
     try:
         fs = company_code.extract_fs(bgn_de=start_date,
-                                     report_tp='quarter')  # 기존 corp_info.extract_fs에서 company_code.extract_fs로 변경
+                                     report_tp='annual')  # 기존 corp_info.extract_fs에서 company_code.extract_fs로 변경
     except (dart.errors.NoDataReceived, dart.errors.APIKeyError, dart.errors.TemporaryLocked,
             dart.errors.OverQueryLimit, dart.errors.InvalidField, dart.errors.ServiceClose,
             dart.errors.UnknownError, RuntimeError) as e:
