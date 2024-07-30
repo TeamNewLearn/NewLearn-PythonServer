@@ -7,6 +7,9 @@ import score_config
 import config
 import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = FastAPI()
 DB_CONFIG = config.get_db_config()
 
