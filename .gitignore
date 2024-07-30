@@ -1,2 +1,3 @@
 __pycache__/
 financial_statements/stored_fin_data/
+.gitignore
