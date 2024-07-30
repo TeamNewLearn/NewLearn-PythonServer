@@ -36,16 +36,16 @@ def load_models():
         logger.error(f"모델 로딩 중 오류 발생: {e}")
         raise HTTPException(status_code=500, detail="모델 로딩 중 오류 발생")
 
-def get_news_articles(company_code):
+def get_news_articles(company_stock_code):
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
         query = "SELECT news_id, translated_title, translated_body, original_title FROM news WHERE stock_code = %s"
-        cursor.execute(query, (company_code,))
+        cursor.execute(query, (company_stock_code,))
         articles = cursor.fetchall()
         cursor.close()
         conn.close()
-        logger.info(f"기업 코드 {company_code}에 대해 {len(articles)}개의 기사를 가져왔습니다.")
+        logger.info(f"기업 코드 {company_stock_code}에 대해 {len(articles)}개의 기사를 가져왔습니다.")
         return articles
     except mysql.connector.Error as e:
         logger.error(f"뉴스 기사 가져오기 중 오류 발생: {e}")
@@ -109,12 +109,12 @@ def save_esg_result(news_id, article_title, esg_label, esg_score, stock_code):
         raise HTTPException(status_code=500, detail="ESG 결과 저장 중 오류 발생")
 
 class ESGRequest(BaseModel):
-    company_code: str
+    company_stock_code: str
 
 # 기업 기사 ESG 분석
 @app.post('/esg_analysis')
 async def esg_analysis(request: ESGRequest):
-    company_stock_code = request.company_code
+    company_stock_code = request.company_stock_code
 
     articles = get_news_articles(company_stock_code)
 
@@ -172,7 +172,7 @@ async def esg_analysis(request: ESGRequest):
 # 분석 완료된 ESG 결과 불러오기
 @app.post('/esg_results')
 async def get_esg_results(request: ESGRequest):
-    company_stock_code = request.company_code
+    company_stock_code = request.company_stock_code
 
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
