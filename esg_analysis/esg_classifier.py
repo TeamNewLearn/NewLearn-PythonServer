@@ -33,30 +33,30 @@ def load_models():
 
         return esg_nlp, category_nlp, sentiment_nlp, fls_nlp
     except Exception as e:
-        logger.error(f"Error loading models: {e}")
-        raise HTTPException(status_code=500, detail="Error loading models")
+        logger.error(f"모델 로딩 중 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail="모델 로딩 중 오류 발생")
 
-def get_news_articles(company_code):
+def get_news_articles(company_stock_code):
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
         query = "SELECT news_id, translated_title, translated_body, original_title FROM news WHERE stock_code = %s"
-        cursor.execute(query, (company_code,))
+        cursor.execute(query, (company_stock_code,))
         articles = cursor.fetchall()
         cursor.close()
         conn.close()
-        logger.info(f"Fetched {len(articles)} articles for company code {company_code}")
+        logger.info(f"기업 코드 {company_stock_code}에 대해 {len(articles)}개의 기사를 가져왔습니다.")
         return articles
     except mysql.connector.Error as e:
-        logger.error(f"Error fetching news articles: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching news articles")
+        logger.error(f"뉴스 기사 가져오기 중 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail="뉴스 기사 가져오기 중 오류 발생")
 
 def classify_article(nlp_pipeline, article_content):
     try:
         return nlp_pipeline(article_content)
     except Exception as e:
-        logger.error(f"Error classifying article: {e}")
-        raise HTTPException(status_code=500, detail="Error classifying article")
+        logger.error(f"기사 분류 중 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail="기사 분류 중 오류 발생")
 
 def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
     score = 0
@@ -80,7 +80,7 @@ def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
 
 def save_esg_result(news_id, article_title, esg_label, esg_score, stock_code):
     if esg_label is None:
-        logger.warning("ESG Label is None, not saving result")
+        logger.warning("ESG 라벨이 None입니다. 결과를 저장하지 않습니다.")
         return  # esg_label이 None일 경우 저장하지 않음
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
@@ -92,7 +92,7 @@ def save_esg_result(news_id, article_title, esg_label, esg_score, stock_code):
         count = cursor.fetchone()['COUNT(*)']
 
         if count > 0:
-            logger.warning(f"ESG result for news_id {news_id} already exists, not saving result")
+            logger.warning(f"뉴스 ID {news_id}에 대한 ESG 결과가 이미 존재합니다. 결과를 저장하지 않습니다.")
         else:
             query = """
                 INSERT INTO esg_result (news_id, article_title, esg_label, esg_score, stock_code)
@@ -100,32 +100,27 @@ def save_esg_result(news_id, article_title, esg_label, esg_score, stock_code):
             """
             cursor.execute(query, (news_id, article_title, esg_label, esg_score, stock_code))
             conn.commit()
-            logger.info(f"Saved ESG result for news_id {news_id}")
+            logger.info(f"뉴스 ID {news_id}에 대한 ESG 결과를 저장했습니다.")
 
         cursor.close()
         conn.close()
     except mysql.connector.Error as e:
-        logger.error(f"Error saving ESG result: {e}")
-        raise HTTPException(status_code=500, detail="Error saving ESG result")
+        logger.error(f"ESG 결과 저장 중 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail="ESG 결과 저장 중 오류 발생")
 
 class ESGRequest(BaseModel):
-    company_name: str
+    company_stock_code: str
 
 # 기업 기사 ESG 분석
 @app.post('/esg_analysis')
 async def esg_analysis(request: ESGRequest):
-    company_name = request.company_name
+    company_stock_code = request.company_stock_code
 
-    company_code = get_company_code(company_name)
-    if not company_code:
-        logger.warning(f"Company code not found for company name {company_name}")
-        raise HTTPException(status_code=404, detail="Company code not found for the given company name.")
-
-    articles = get_news_articles(company_code)
+    articles = get_news_articles(company_stock_code)
 
     if not articles:
-        logger.warning(f"No articles found for company code {company_code}")
-        raise HTTPException(status_code=404, detail=f"No articles found for the given company code: {company_code}")
+        logger.warning(f"기업 코드 {company_stock_code}에 대한 기사를 찾을 수 없습니다.")
+        raise HTTPException(status_code=404, detail=f"기업 코드 {company_stock_code}에 대한 기사를 찾을 수 없습니다.")
 
     esg_nlp, category_nlp, sentiment_nlp, fls_nlp = load_models()
 
@@ -141,7 +136,7 @@ async def esg_analysis(request: ESGRequest):
                 esg_label = max(esg_results, key=lambda x: x['score'])['label']
 
                 if esg_label == "None":
-                    logger.warning(f"ESG Label is None for article {article['news_id']}")
+                    logger.warning(f"기사 {article['news_id']}에 대한 ESG 라벨이 None입니다.")
                     continue  # esg_label이 None이면 이 기사 생략
 
                 # Process category, sentiment, and fls models in parallel
@@ -156,14 +151,14 @@ async def esg_analysis(request: ESGRequest):
                 esg_score = calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls)
 
                 # 결과 저장
-                save_esg_result(article['news_id'], article['original_title'], esg_label, esg_score, company_code)
+                save_esg_result(article['news_id'], article['original_title'], esg_label, esg_score, company_stock_code)
 
                 results.append({
                     "기사 ID": article['news_id'],
                     "기사 한글명": article['original_title'],
                     "기사 ESG 분야": esg_label,
                     "기사 ESG 점수": esg_score,
-                    "기업 코드": company_code
+                    "기업 코드": company_stock_code
                 })
             except ValueError as ve:
                 logger.error(f"ValueError: {ve}")
@@ -177,24 +172,19 @@ async def esg_analysis(request: ESGRequest):
 # 분석 완료된 ESG 결과 불러오기
 @app.post('/esg_results')
 async def get_esg_results(request: ESGRequest):
-    company_name = request.company_name
-
-    company_code = get_company_code(company_name)
-    if not company_code:
-        logger.warning(f"Company code not found for company name {company_name}")
-        raise HTTPException(status_code=404, detail="Company code not found for the given company name.")
+    company_stock_code = request.company_stock_code
 
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
         query = "SELECT * FROM esg_result WHERE stock_code = %s"
-        cursor.execute(query, (company_code,))
+        cursor.execute(query, (company_stock_code,))
         results = cursor.fetchall()
         cursor.close()
         conn.close()
-        logger.info(f"Fetched {len(results)} esg results for company code {company_code}")
+        logger.info(f"기업 코드 {company_stock_code}에 대해 {len(results)}개의 ESG 결과를 가져왔습니다.")
         if not results:
-            raise HTTPException(status_code=404, detail="No ESG results found for the given company code.")
+            raise HTTPException(status_code=404, detail="기업 코드에 대한 ESG 결과를 찾을 수 없습니다.")
 
         formatted_results = [{
             "기사 ID": result["news_id"],
@@ -206,26 +196,8 @@ async def get_esg_results(request: ESGRequest):
 
         return formatted_results
     except mysql.connector.Error as e:
-        logger.error(f"Error fetching ESG results: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching ESG results")
-
-def get_company_code(company_name):
-    try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT stock_code FROM stock_info WHERE stock_name = %s"
-        cursor.execute(query, (company_name,))
-        result = cursor.fetchone()
-        cursor.close()
-        conn.close()
-        if result:
-            logger.info(f"Found stock code {result['stock_code']} for company name {company_name}")
-        else:
-            logger.warning(f"No stock code found for company name {company_name}")
-        return result['stock_code'] if result else None
-    except mysql.connector.Error as e:
-        logger.error(f"Error fetching company code: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching company code")
+        logger.error(f"ESG 결과 가져오기 중 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail="ESG 결과 가져오기 중 오류 발생")
 
 if __name__ == '__main__':
     import uvicorn
