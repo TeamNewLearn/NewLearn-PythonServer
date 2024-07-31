@@ -28,7 +28,7 @@ app.add_middleware(
 
 load_dotenv()
 
-api_key = os.getenv('DART_API_KEY')
+api_key='698e1025376cfbf1631574822d5744a07b1c30ea'
 dart.set_api_key(api_key=api_key)
 
 corp_list = dart.get_corp_list()
@@ -90,10 +90,13 @@ async def financial_statements():
         if not corp_info:
             continue
 
-        for period in [3, 5]:
-            start_date = get_start_date(period)
+        for period in [1, 3]:
+            # start_date = get_start_date(period)
+            start_date = '20240101'
+            end_date = '20240731'
             try:
-                fs = corp_info.extract_fs(bgn_de=start_date, report_tp='annual') # annual / half / quarter
+                fs = corp_info.extract_fs(bgn_de=start_date, end_de=end_date, report_tp='annual', lang='ko',
+                                          last_report_only=True, dataset='web') # annual / half / quarter
                 try:
                     df_statement = fs['is']
                     if df_statement is None:
@@ -107,7 +110,7 @@ async def financial_statements():
                 df_statement.columns = make_unique(df_statement.columns.tolist())
                 result_json = df_statement.to_json(orient='records', force_ascii=False)
                 
-                file_path = os.path.join(output_dir, f"{code}_{period}.json")
+                file_path = os.path.join(output_dir, f"{code}_{period+2}.json")
                 with open(file_path, 'w', encoding='utf-8') as file:
                     file.write(result_json)
             except Exception as e:
