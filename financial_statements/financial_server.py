@@ -92,11 +92,11 @@ async def financial_statements():
 
         for period in [1, 3]:
             # start_date = get_start_date(period)
-            start_date = '20240101'
+            start_date = get_start_date(period)
             end_date = '20240731'
             try:
                 fs = corp_info.extract_fs(bgn_de=start_date, end_de=end_date, report_tp='annual', lang='ko',
-                                          last_report_only=True, dataset='web') # annual / half / quarter
+                                          last_report_only=True, dataset='web', skip_error=True) # annual / half / quarter
                 try:
                     df_statement = fs['is']
                     if df_statement is None:
