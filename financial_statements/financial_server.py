@@ -35,7 +35,6 @@ corp_list = dart.get_corp_list()
 
 def get_company_code(company_stock_code):
     corp_info = corp_list.find_by_stock_code(company_stock_code)
-    print(corp_info)
     return corp_info if corp_info else None
 
 def get_start_date(years):
