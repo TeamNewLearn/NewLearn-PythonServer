@@ -1,216 +1,147 @@
-from fastapi import FastAPI, HTTPException
-from transformers import BertTokenizer, BertForSequenceClassification, pipeline
-from pydantic import BaseModel
-import mysql.connector
-import concurrent.futures
-import score_config
-import config
-import logging
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+import dart_fss as dart
+from dotenv import load_dotenv
+import os
+from datetime import datetime, timedelta
+import re
+import json
+import sys
+from pathlib import Path
+from pydantic import BaseModel
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+from company_code_list import company_codes
+
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+from company_code_list import company_codes
 
 app = FastAPI()
 
-# CORS 설정 추가
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 모든 도메인에서의 접근을 허용
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # 모든 HTTP 메서드를 허용
-    allow_headers=["*"],  # 모든 헤더를 허용
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-DB_CONFIG = config.get_db_config()
+load_dotenv()
 
-def load_models():
-    try:
-        esg_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-esg', num_labels=4)
-        esg_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-esg')
-        esg_nlp = pipeline("text-classification", model=esg_model, tokenizer=esg_tokenizer, truncation=True, max_length=512)
+api_key='698e1025376cfbf1631574822d5744a07b1c30ea'
+dart.set_api_key(api_key=api_key)
 
-        category_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-esg-9-categories', num_labels=9)
-        category_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-esg-9-categories')
-        category_nlp = pipeline("text-classification", model=category_model, tokenizer=category_tokenizer, truncation=True, max_length=512)
+corp_list = dart.get_corp_list()
 
-        sentiment_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-tone', num_labels=3)
-        sentiment_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-tone')
-        sentiment_nlp = pipeline("text-classification", model=sentiment_model, tokenizer=sentiment_tokenizer, truncation=True, max_length=512)
+def get_company_code(company_stock_code):
+    corp_info = corp_list.find_by_stock_code(company_stock_code)
+    return corp_info if corp_info else None
 
-        fls_model = BertForSequenceClassification.from_pretrained('yiyanghkust/finbert-fls', num_labels=3, ignore_mismatched_sizes=True)
-        fls_tokenizer = BertTokenizer.from_pretrained('yiyanghkust/finbert-fls')
-        fls_nlp = pipeline("text-classification", model=fls_model, tokenizer=fls_tokenizer, truncation=True, max_length=512)
+def get_start_date(years):
+    today = datetime.today()
+    start_date = today - timedelta(days=365 * years)
+    return start_date.strftime('%Y%m%d')
 
-        return esg_nlp, category_nlp, sentiment_nlp, fls_nlp
-    except Exception as e:
-        logger.error(f"모델 로딩 중 오류 발생: {e}")
-        raise HTTPException(status_code=500, detail="모델 로딩 중 오류 발생")
+def error_handle(err):
+    if isinstance(err, dart.errors.NoDataReceived):
+        raise HTTPException(status_code=404, detail="요청한 기업의 재무 데이터가 존재하지 않습니다.")
+    elif isinstance(err, dart.errors.APIKeyError):
+        raise HTTPException(status_code=401, detail="등록되지 않은 API 키입니다.")
+    elif isinstance(err, dart.errors.TemporaryLocked):
+        raise HTTPException(status_code=429, detail="임시적으로 API 사용이 제한되었습니다.")
+    elif isinstance(err, dart.errors.OverQueryLimit):
+        raise HTTPException(status_code=429, detail="쿼리 한도를 초과하였습니다.")
+    elif isinstance(err, dart.errors.InvalidField):
+        raise HTTPException(status_code=400, detail="유효하지 않은 필드입니다.")
+    elif isinstance(err, dart.errors.ServiceClose):
+        raise HTTPException(status_code=503, detail="현재 서비스가 종료되었습니다.")
+    elif isinstance(err, dart.errors.UnknownError):
+        raise HTTPException(status_code=500, detail="알 수 없는 오류가 발생했습니다.")
+    else:
+        raise HTTPException(status_code=500, detail=f"서버에서 알 수 없는 오류가 발생했습니다: {str(err)}")
 
-def get_news_articles(company_stock_code):
-    try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT news_id, translated_title, translated_body, original_title FROM news WHERE stock_code = %s"
-        cursor.execute(query, (company_stock_code,))
-        articles = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        logger.info(f"기업 코드 {company_stock_code}에 대해 {len(articles)}개의 기사를 가져왔습니다.")
-        return articles
-    except mysql.connector.Error as e:
-        logger.error(f"뉴스 기사 가져오기 중 오류 발생: {e}")
-        raise HTTPException(status_code=500, detail="뉴스 기사 가져오기 중 오류 발생")
+def simplify_column_name(col):
+    if isinstance(col, tuple):
+        simplified_name = re.sub(r'\[.*?\]|\(.*?\)|\s\|\s.*', '', col[0])
+        simplified_name = re.sub(r'[^a-zA-Z0-9가-힣]', '', simplified_name)
+        simplified_name = re.sub(r'\s+', ' ', simplified_name).strip()
+        return simplified_name
+    return col
 
-def classify_article(nlp_pipeline, article_content):
-    try:
-        return nlp_pipeline(article_content)
-    except Exception as e:
-        logger.error(f"기사 분류 중 오류 발생: {e}")
-        raise HTTPException(status_code=500, detail="기사 분류 중 오류 발생")
-
-def calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls):
-    score = 0
-    score += score_config.ESG_LABEL_SCORES.get(esg_label, 0)
-    score += score_config.CATEGORY_SCORES.get(esg_category, 0)
-    category_label_mapping = {
-        'Climate Change': 'Environmental',
-        'Natural Capital': 'Environmental',
-        'Pollution & Waste': 'Environmental',
-        'Human Capital': 'Social',
-        'Product Liability': 'Social',
-        'Community Relations': 'Social',
-        'Corporate Governance': 'Governance',
-        'Business Ethics & Values': 'Governance'
-    }
-    if category_label_mapping.get(esg_category) == esg_label:
-        score += score_config.CATEGORY_MATCH_BONUS
-    score += score_config.SENTIMENT_SCORES.get(esg_sentiment, 0)
-    score += score_config.FLS_SCORES.get(esg_fls, 0)
-    return score
-
-def save_esg_result(news_id, article_title, esg_label, esg_score, stock_code):
-    if esg_label is None:
-        logger.warning("ESG 라벨이 None입니다. 결과를 저장하지 않습니다.")
-        return  # esg_label이 None일 경우 저장하지 않음
-    try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor(dictionary=True)
-
-        # 중복 확인
-        check_query = "SELECT COUNT(*) FROM esg_result WHERE news_id = %s"
-        cursor.execute(check_query, (news_id,))
-        count = cursor.fetchone()['COUNT(*)']
-
-        if count > 0:
-            logger.warning(f"뉴스 ID {news_id}에 대한 ESG 결과가 이미 존재합니다. 결과를 저장하지 않습니다.")
+def make_unique(column_names):
+    seen = {}
+    for idx, name in enumerate(column_names):
+        if name in seen:
+            seen[name] += 1
+            column_names[idx] = f"{name}_{seen[name]}"
         else:
-            query = """
-                INSERT INTO esg_result (news_id, article_title, esg_label, esg_score, stock_code)
-                VALUES (%s, %s, %s, %s, %s)
-            """
-            cursor.execute(query, (news_id, article_title, esg_label, esg_score, stock_code))
-            conn.commit()
-            logger.info(f"뉴스 ID {news_id}에 대한 ESG 결과를 저장했습니다.")
+            seen[name] = 0
+    return column_names
 
-        cursor.close()
-        conn.close()
-    except mysql.connector.Error as e:
-        logger.error(f"ESG 결과 저장 중 오류 발생: {e}")
-        raise HTTPException(status_code=500, detail="ESG 결과 저장 중 오류 발생")
+# 재무제표 저장
+@app.get('/save_financial_statements')
+async def financial_statements():
+    output_dir = os.path.join(os.path.dirname(__file__), 'stored_fin_data')
+    os.makedirs(output_dir, exist_ok=True)
 
-class ESGRequest(BaseModel):
-    company_stock_code: str
+    for code in company_codes:
+        corp_info = get_company_code(code)
+        if not corp_info:
+            continue
 
-# 기업 기사 ESG 분석
-@app.post('/esg_analysis')
-async def esg_analysis(request: ESGRequest):
-    company_stock_code = request.company_stock_code
-
-    articles = get_news_articles(company_stock_code)
-
-    if not articles:
-        logger.warning(f"기업 코드 {company_stock_code}에 대한 기사를 찾을 수 없습니다.")
-        raise HTTPException(status_code=404, detail=f"기업 코드 {company_stock_code}에 대한 기사를 찾을 수 없습니다.")
-
-    esg_nlp, category_nlp, sentiment_nlp, fls_nlp = load_models()
-
-    results = []
-
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = {executor.submit(classify_article, esg_nlp, article['translated_body']): article for article in articles}
-
-        for future in concurrent.futures.as_completed(futures):
-            article = futures[future]
+        for period in [1, 3]:
+            # start_date = get_start_date(period)
+            start_date = get_start_date(period)
+            end_date = '20240731'
             try:
-                esg_results = future.result()
-                esg_label = max(esg_results, key=lambda x: x['score'])['label']
+                fs = corp_info.extract_fs(bgn_de=start_date, end_de=end_date, report_tp='annual', lang='ko',
+                                          last_report_only=True, dataset='web', skip_error=True) # annual / half / quarter
+                try:
+                    df_statement = fs['is']
+                    if df_statement is None:
+                        raise KeyError
+                except KeyError:
+                    df_statement = fs['cis']
+                    if df_statement is None:
+                        raise HTTPException(status_code=404, detail="포괄 손익계산서 데이터가 비어있습니다.")
 
-                if esg_label == "None":
-                    logger.warning(f"기사 {article['news_id']}에 대한 ESG 라벨이 None입니다.")
-                    continue  # esg_label이 None이면 이 기사 생략
-
-                # Process category, sentiment, and fls models in parallel
-                category_result = classify_article(category_nlp, article['translated_body'])
-                sentiment_result = classify_article(sentiment_nlp, article['translated_body'])
-                fls_result = classify_article(fls_nlp, article['translated_body'])
-
-                esg_category = max(category_result, key=lambda x: x['score'])['label']
-                esg_sentiment = max(sentiment_result, key=lambda x: x['score'])['label']
-                esg_fls = max(fls_result, key=lambda x: x['score'])['label']
-
-                esg_score = calculate_investment_score(esg_label, esg_category, esg_sentiment, esg_fls)
-
-                # 결과 저장
-                save_esg_result(article['news_id'], article['original_title'], esg_label, esg_score, company_stock_code)
-
-                results.append({
-                    "기사 ID": article['news_id'],
-                    "기사 한글명": article['original_title'],
-                    "기사 ESG 분야": esg_label,
-                    "기사 ESG 점수": esg_score,
-                    "기업 코드": company_stock_code
-                })
-            except ValueError as ve:
-                logger.error(f"ValueError: {ve}")
+                df_statement.columns = [simplify_column_name(col) for col in df_statement.columns]
+                df_statement.columns = make_unique(df_statement.columns.tolist())
+                result_json = df_statement.to_json(orient='records', force_ascii=False)
+                
+                file_path = os.path.join(output_dir, f"{code}_{period+2}.json")
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    file.write(result_json)
+            except Exception as e:
+                error_handle(e)
                 continue
-            except Exception as exc:
-                logger.error(f"Exception: {exc}")
-                raise HTTPException(status_code=500, detail=str(exc))
 
-    return results
+    return {"message": "Financial statements have been processed and saved."}
 
-# 분석 완료된 ESG 결과 불러오기
-@app.post('/esg_results')
-async def get_esg_results(request: ESGRequest):
-    company_stock_code = request.company_stock_code
 
+
+# API 요청 파라미터 정의
+class FinancialRequest(BaseModel):
+    company_stock_code: str
+    period: int
+
+@app.post('/financial_statements')
+async def get_financial_statement(data: FinancialRequest):
+    if data.period not in [3, 5]:
+        raise HTTPException(status_code=400, detail='유효하지 않은 기간입니다. 3년 또는 5년을 선택해 주세요.')
+
+    file_path = os.path.join(os.path.dirname(__file__), 'stored_fin_data', f"{data.company_stock_code}_{data.period}.json")
     try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor(dictionary=True)
-        query = "SELECT * FROM esg_result WHERE stock_code = %s"
-        cursor.execute(query, (company_stock_code,))
-        results = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        logger.info(f"기업 코드 {company_stock_code}에 대해 {len(results)}개의 ESG 결과를 가져왔습니다.")
-        if not results:
-            raise HTTPException(status_code=404, detail="기업 코드에 대한 ESG 결과를 찾을 수 없습니다.")
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = json.load(file)
+        return content
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="해당 파일을 찾을 수 없습니다.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"파일을 읽는 중 오류가 발생했습니다: {str(e)}")
 
-        formatted_results = [{
-            "기사 ID": result["news_id"],
-            "기사 한글명": result["article_title"],
-            "기사 ESG 분야": result["esg_label"],
-            "기사 ESG 점수": result["esg_score"],
-            "기업 코드": result["stock_code"]
-        } for result in results]
 
-        return formatted_results
-    except mysql.connector.Error as e:
-        logger.error(f"ESG 결과 가져오기 중 오류 발생: {e}")
-        raise HTTPException(status_code=500, detail="ESG 결과 가져오기 중 오류 발생")
 
 if __name__ == '__main__':
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=5002)
+    uvicorn.run(app, host="0.0.0.0", port=5001)
