@@ -119,18 +119,12 @@ async def financial_statements():
     return {"message": "Financial statements have been processed and saved."}
 
 
-
-# API 요청 파라미터 정의
-class FinancialRequest(BaseModel):
-    company_stock_code: str
-    period: int
-
-@app.post('/financial_statements')
-async def get_financial_statement(data: FinancialRequest):
-    if data.period not in [3, 5]:
+@app.get('/financial_statements/{company_stock_code}/{period}')
+async def get_financial_statement(company_stock_code: str, period: int):
+    if period not in [3, 5]:
         raise HTTPException(status_code=400, detail='유효하지 않은 기간입니다. 3년 또는 5년을 선택해 주세요.')
 
-    file_path = os.path.join(os.path.dirname(__file__), 'stored_fin_data', f"{data.company_stock_code}_{data.period}.json")
+    file_path = os.path.join(os.path.dirname(__file__), 'stored_fin_data', f"{company_stock_code}_{period}.json")
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
             content = json.load(file)
