@@ -121,7 +121,7 @@ def save_esg_result(news_id, article_title, esg_label, esg_score, stock_code):
 
 
 # 기업 기사 ESG 분석
-@app.post('/esg_analysis/{company_stock_code}')
+@app.get('/esg_analysis/{company_stock_code}')
 async def esg_analysis(company_stock_code: str):
     articles = get_news_articles(company_stock_code)
 
@@ -178,7 +178,7 @@ async def esg_analysis(company_stock_code: str):
 
 
 # 분석 완료된 ESG 결과 불러오기
-@app.post('/esg_results/{company_stock_code}')
+@app.get('/esg_results/{company_stock_code}')
 async def get_esg_results(company_stock_code: str):
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
