@@ -119,10 +119,14 @@ def save_esg_result(news_id, article_title, esg_label, esg_score, stock_code):
         logger.error(f"ESG 결과 저장 중 오류 발생: {e}")
         raise HTTPException(status_code=500, detail="ESG 결과 저장 중 오류 발생")
 
+class ESGRequest(BaseModel):
+    company_stock_code: str
 
 # 기업 기사 ESG 분석
-@app.get('/esg_analysis/{company_stock_code}')
-async def esg_analysis(company_stock_code: str):
+@app.post('/esg_analysis')
+async def esg_analysis(request: ESGRequest):
+    company_stock_code = request.company_stock_code
+
     articles = get_news_articles(company_stock_code)
 
     if not articles:
@@ -176,10 +180,11 @@ async def esg_analysis(company_stock_code: str):
 
     return results
 
-
 # 분석 완료된 ESG 결과 불러오기
-@app.get('/esg_results/{company_stock_code}')
-async def get_esg_results(company_stock_code: str):
+@app.post('/esg_results')
+async def get_esg_results(request: ESGRequest):
+    company_stock_code = request.company_stock_code
+
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor(dictionary=True)
@@ -204,7 +209,6 @@ async def get_esg_results(company_stock_code: str):
     except mysql.connector.Error as e:
         logger.error(f"ESG 결과 가져오기 중 오류 발생: {e}")
         raise HTTPException(status_code=500, detail="ESG 결과 가져오기 중 오류 발생")
-
 
 if __name__ == '__main__':
     import uvicorn
