@@ -21,10 +21,11 @@ class SkillSetFinalAnswerExecutor:
         }
 
         response = requests.post(
-            self._host + '/testapp/v1/skillsets/pxzpzfac/versions/11/final-answer',
+           self._host + '/testapp/v1/skillsets/pxzpzfac/versions/18/final-answer',
             headers=headers,
             data=json.dumps(skill_set_cot_request)
         )
+        print(response.status_code, response)
 
         if response.status_code == 200:
             for line in response.iter_lines():
@@ -60,7 +61,7 @@ def clova_chat(request: QueryRequest):
         host='https://clovastudio.stream.ntruss.com',
         api_key='NTA0MjU2MWZlZTcxNDJiYx5nJ9z87DKxlyRynnpD92tzfGHkZUwGbaaySiF5jj/d',
         api_key_primary_val='EJWfdqk0rE2FRZtyWjwqUSBXdXZfZjBpMS0EUACu',
-        request_id='cb3bb9b7-88fb-469f-9301-af25338a4ca6'
+        request_id='e7e4e1dc-6851-4f06-a14d-b3451f1ca21f'
     )
 
     request_data = {
